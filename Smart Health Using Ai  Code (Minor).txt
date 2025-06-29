@@ -1,0 +1,440 @@
+1. Project Structure (Conceptual)
+smart_health_ai/
++-- data/
+¦   +-- simulated_patient_data.csv  # Placeholder for collected/simulated data
++-- models/
+¦   +-- predictive_model.pkl      # Trained ML model
++-- src/
+¦   +-- data_generator.py         # Simulates real-time sensor data
+¦   +-- data_preprocessing.py     # Functions for data cleaning and preparation
+¦   +-- model_training.py         # Script to train and save the ML model
+¦   +-- prediction_engine.py      # Core logic for making predictions
+¦   +-- main.py                   # Main application logic
++-- requirements.txt              # Python dependencies
++-- README.md
+2. Code Implementation
+Let's start with the core components.
+2.1 src/data_generator.py
+pandas
+numpy
+scikit-learn
+matplotlib
+seaborn
+
+2.2 Code 
+
+import pandas as pd
+import numpy as np
+import datetime
+import random
+
+def generate_patient_data(num_records=1000, patient_id="P001"):
+    """
+    Generates simulated patient health data for chronic disease monitoring.
+    Features include: HeartRate, BloodPressure (Systolic, Diastolic), GlucoseLevel,
+    ActivityLevel, SleepHours, StressLevel, and a 'Risk' label.
+    """
+    data = []
+    start_date = datetime.datetime.now() - datetime.timedelta(days=num_records)
+
+    for i in range(num_records):
+        timestamp = start_date + datetime.timedelta(days=i)
+        
+        heart_rate = random.randint(60, 100) # BPM
+        systolic_bp = random.randint(110, 140) # mmHg
+        diastolic_bp = random.randint(70, 90) # mmHg
+        glucose_level = random.randint(80, 180) # mg/dL (fasting/post-meal mix)
+        activity_level = random.uniform(0.1, 10.0) # METs (Metabolic Equivalents of Task)
+        sleep_hours = random.uniform(4.0, 9.0)
+        stress_level = random.uniform(1.0, 10.0) # Self-reported stress scale
+
+        # Introduce some 'risk' patterns for demonstration
+        risk = 0 # Default to low risk
+        if heart_rate > 90 or systolic_bp > 130 or glucose_level > 150 or sleep_hours < 5.0 or stress_level > 7.0:
+            risk = 1 # High risk for demonstration purposes
+
+        # Add some noise to make it more realistic and create some 'mild' risk
+        if random.random() < 0.15 and risk == 0: # 15% chance to introduce mild risk
+            if random.random() < 0.5:
+                heart_rate += random.randint(5, 10)
+            else:
+                glucose_level += random.randint(10, 30)
+            if random.random() < 0.2: # A small chance to flip to high risk with noise
+                risk = 1
+
+        data.append([patient_id, timestamp, heart_rate, systolic_bp, diastolic_bp,
+                     glucose_level, activity_level, sleep_hours, stress_level, risk])
+
+    df = pd.DataFrame(data, columns=[
+        'patient_id', 'timestamp', 'HeartRate', 'SystolicBP', 'DiastolicBP',
+        'GlucoseLevel', 'ActivityLevel', 'SleepHours', 'StressLevel', 'Risk'
+    ])
+    return df
+
+if __name__ == "__main__":
+    print("Generating simulated patient data...")
+    df_patient1 = generate_patient_data(num_records=500, patient_id="P001")
+    df_patient2 = generate_patient_data(num_records=500, patient_id="P002")
+    
+    # Combine data from multiple patients
+    all_data = pd.concat([df_patient1, df_patient2], ignore_index=True)
+    
+    # Save to a CSV file
+    all_data.to_csv("data/simulated_patient_data.csv", index=False)
+    print(f"Simulated data saved to data/simulated_patient_data.csv with {len(all_data)} records.")
+    print(all_data.head())
+    print("\nRisk distribution:")
+ print(all_data['Risk'].value_counts())
+ 
+ 2.3 src/data_preprocessing.py
+ 
+ import pandas as pd
+ from sklearn.model_selection import train_test_split
+ from sklearn.preprocessing import StandardScaler, MinMaxScaler
+ 
+ def load_and_preprocess_data(filepath="data/simulated_patient_data.csv"):
+     """
+     Loads simulated patient data, handles missing values (if any),
+     and performs feature scaling.
+     """
+     df = pd.read_csv(filepath)
+ 
+     # Convert timestamp to datetime objects (if not already)
+     df['timestamp'] = pd.to_datetime(df['timestamp'])
+ 
+     # Drop patient_id and timestamp for model training for simplicity,
+     # as we're focusing on current physiological metrics for prediction.
+     # In a real system, patient_id would be crucial for personalized models
+     # and timestamp for time-series analysis.
+     features = df.drop(columns=['patient_id', 'timestamp', 'Risk'])
+     target = df['Risk']
+ 
+     # Handle missing values (for this simulated data, none are expected, but good practice)
+     # For simplicity, we'll fill with the mean/median, or you might drop rows.
+     # For real-world, consider more sophisticated imputation.
+     features = features.fillna(features.mean())
+ 
+     # Feature Scaling: Standardize numerical features
+     # Using StandardScaler for most ML models
+     scaler = StandardScaler()
+     scaled_features = scaler.fit_transform(features)
+     scaled_features_df = pd.DataFrame(scaled_features, columns=features.columns)
+ 
+     return scaled_features_df, target, scaler, features.columns.tolist()
+ 
+ if __name__ == "__main__":
+     features_df, target_series, scaler, feature_names = load_and_preprocessing_data()
+     print("Preprocessed features (first 5 rows):")
+     print(features_df.head())
+     print("\nTarget (first 5 values):")
+     print(target_series.head())
+     print("\nFeature names:", feature_names)
+     print("\nShape of preprocessed data:", features_df.shape)
+     print("Shape of target data:", target_series.shape)
+ 
+ 2.4 src/model_training.py
+ 
+ import pandas as pd
+ from sklearn.model_selection import train_test_split
+ from sklearn.linear_model import LogisticRegression
+ from sklearn.ensemble import RandomForestClassifier
+ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+ import joblib # For saving/loading models
+ 
+ from src.data_preprocessing import load_and_preprocess_data
+ 
+ def train_predictive_model(filepath="data/simulated_patient_data.csv"):
+     """
+     Loads preprocessed data, splits into training/testing sets,
+     trains a machine learning model, evaluates it, and saves the model.
+     """
+     features_df, target_series, scaler, feature_names = load_and_preprocess_data(filepath)
+ 
+     # Split data into training and testing sets
+     X_train, X_test, y_train, y_test = train_test_split(
+         features_df, target_series, test_size=0.2, random_state=42, stratify=target_series
+     )
+ 
+     print(f"Training data shape: {X_train.shape}, Test data shape: {X_test.shape}")
+     print(f"Target distribution in training set:\n{y_train.value_counts(normalize=True)}")
+     print(f"Target distribution in test set:\n{y_test.value_counts(normalize=True)}")
+ 
+     # Initialize and train a Logistic Regression model
+     # Logistic Regression is a good baseline for binary classification
+     model = LogisticRegression(random_state=42, solver='liblinear') # 'liblinear' is good for small datasets
+     model.fit(X_train, y_train)
+ 
+     # Alternatively, you could try RandomForestClassifier
+     # model = RandomForestClassifier(random_state=42, n_estimators=100)
+     # model.fit(X_train, y_train)
+ 
+     # Make predictions on the test set
+     y_pred = model.predict(X_test)
+     y_prob = model.predict_proba(X_test)[:, 1] # Probability of the positive class (risk=1)
+ 
+     # Evaluate the model
+     accuracy = accuracy_score(y_test, y_pred)
+     precision = precision_score(y_test, y_pred)
+     recall = recall_score(y_test, y_pred)
+     f1 = f1_score(y_test, y_pred)
+     roc_auc = roc_auc_score(y_test, y_prob)
+ 
+     print("\n--- Model Evaluation ---")
+     print(f"Accuracy: {accuracy:.4f}")
+     print(f"Precision: {precision:.4f}")
+     print(f"Recall: {recall:.4f}")
+     print(f"F1-Score: {f1:.4f}")
+     print(f"ROC-AUC: {roc_auc:.4f}")
+ 
+     # Save the trained model and the scaler
+     model_path = "models/predictive_model.pkl"
+     scaler_path = "models/scaler.pkl"
+     feature_names_path = "models/feature_names.pkl"
+ 
+     joblib.dump(model, model_path)
+     joblib.dump(scaler, scaler_path)
+     joblib.dump(feature_names, feature_names_path)
+ 
+     print(f"\nModel saved to {model_path}")
+     print(f"Scaler saved to {scaler_path}")
+     print(f"Feature names saved to {feature_names_path}")
+ 
+     return model, scaler, feature_names
+ 
+ if __name__ == "__main__":
+     # Ensure the 'data' and 'models' directories exist
+     import os
+     os.makedirs("data", exist_ok=True)
+     os.makedirs("models", exist_ok=True)
+     
+     # First, generate data if not already present
+     from src.data_generator import generate_patient_data
+     if not os.path.exists("data/simulated_patient_data.csv"):
+         print("Data file not found, generating...")
+         df_patient1 = generate_patient_data(num_records=500, patient_id="P001")
+         df_patient2 = generate_patient_data(num_records=500, patient_id="P002")
+         all_data = pd.concat([df_patient1, df_patient2], ignore_index=True)
+         all_data.to_csv("data/simulated_patient_data.csv", index=False)
+         print("Simulated data generated.")
+ 
+     trained_model, trained_scaler, loaded_feature_names = train_predictive_model()
+     print("\nModel training complete.")
+ 
+ 2.5 src/prediction_engine.py
+ 
+ import joblib
+ import pandas as pd
+ import numpy as np
+ import os
+ 
+ class PredictionEngine:
+     def __init__(self, model_path="models/predictive_model.pkl",
+                  scaler_path="models/scaler.pkl",
+                  feature_names_path="models/feature_names.pkl"):
+         """
+         Initializes the prediction engine by loading the trained model, scaler,
+         and feature names.
+         """
+         if not os.path.exists(model_path):
+             raise FileNotFoundError(f"Model file not found at {model_path}. Please train the model first.")
+         if not os.path.exists(scaler_path):
+             raise FileNotFoundError(f"Scaler file not found at {scaler_path}. Please train the model first.")
+         if not os.path.exists(feature_names_path):
+             raise FileNotFoundError(f"Feature names file not found at {feature_names_path}. Please train the model first.")
+ 
+         self.model = joblib.load(model_path)
+         self.scaler = joblib.load(scaler_path)
+         self.feature_names = joblib.load(feature_names_path)
+         print("Prediction engine loaded: Model, Scaler, and Feature Names.")
+ 
+     def predict_risk(self, patient_data: dict):
+         """
+         Predicts the health risk for a single patient based on their current vital signs.
+         
+         Args:
+             patient_data (dict): A dictionary containing current vital signs.
+                                  Example: {
+                                     'HeartRate': 75,
+                                     'SystolicBP': 120,
+                                     'DiastolicBP': 80,
+                                     'GlucoseLevel': 110,
+                                     'ActivityLevel': 5.2,
+                                     'SleepHours': 7.5,
+                                     'StressLevel': 3.0
+                                  }
+         Returns:
+             tuple: A tuple containing (predicted_risk, risk_probability).
+                    predicted_risk (int): 0 for low risk, 1 for high risk.
+                    risk_probability (float): Probability of high risk (between 0 and 1).
+         """
+         # Create a DataFrame from the input data, ensuring correct column order
+         try:
+             input_df = pd.DataFrame([patient_data], columns=self.feature_names)
+         except KeyError as e:
+             print(f"Error: Missing expected feature in input data: {e}")
+             print(f"Expected features: {self.feature_names}")
+             return None, None
+ 
+         # Scale the input data using the loaded scaler
+         scaled_input = self.scaler.transform(input_df)
+ 
+         # Make prediction
+         predicted_risk = self.model.predict(scaled_input)[0]
+         risk_probability = self.model.predict_proba(scaled_input)[:, 1][0]
+ 
+         return predicted_risk, risk_probability
+ 
+ if __name__ == "__main__":
+     # Ensure models are trained before running this
+     print("Checking if models are trained. If not, please run src/model_training.py first.")
+     
+     # Example usage:
+     try:
+         engine = PredictionEngine()
+ 
+         # Simulate real-time input data for a patient
+         current_patient_data_low_risk = {
+             'HeartRate': 70,
+             'SystolicBP': 115,
+             'DiastolicBP': 75,
+             'GlucoseLevel': 95,
+             'ActivityLevel': 6.0,
+             'SleepHours': 8.0,
+             'StressLevel': 2.5
+         }
+ 
+         current_patient_data_high_risk = {
+             'HeartRate': 95,
+             'SystolicBP': 135,
+             'DiastolicBP': 88,
+             'GlucoseLevel': 160,
+             'ActivityLevel': 2.0,
+             'SleepHours': 5.0,
+             'StressLevel': 8.5
+         }
+ 
+         predicted_risk_low, prob_low = engine.predict_risk(current_patient_data_low_risk)
+         print(f"\nPatient (Low Risk Profile): Predicted Risk = {predicted_risk_low}, Probability of High Risk = {prob_low:.2f}")
+         if predicted_risk_low == 0:
+             print("Recommendation: Maintain healthy lifestyle.")
+         else:
+             print("Recommendation: Consult a doctor immediately. High risk detected!")
+ 
+         predicted_risk_high, prob_high = engine.predict_risk(current_patient_data_high_risk)
+         print(f"\nPatient (High Risk Profile): Predicted Risk = {predicted_risk_high}, Probability of High Risk = {prob_high:.2f}")
+         if predicted_risk_high == 0:
+             print("Recommendation: Maintain healthy lifestyle.")
+         else:
+             print("Recommendation: Consult a doctor immediately. High risk detected!")
+ 
+     except FileNotFoundError as e:
+         print(e)
+         print("Please run `python src/model_training.py` to train the models first.")
+     except Exception as e:
+         print(f"An unexpected error occurred: {e}")
+ 
+ 2.6 src/main.py
+ 
+ import os
+ from src.data_generator import generate_patient_data
+ from src.model_training import train_predictive_model
+ from src.prediction_engine import PredictionEngine
+ 
+ def main():
+     print("--- Smart Health AI System ---")
+ 
+     # 1. Ensure data and model directories exist
+     os.makedirs("data", exist_ok=True)
+     os.makedirs("models", exist_ok=True)
+ 
+     # 2. Generate or verify data
+     data_filepath = "data/simulated_patient_data.csv"
+     if not os.path.exists(data_filepath):
+         print("Simulated patient data not found. Generating sample data...")
+         df_patient1 = generate_patient_data(num_records=500, patient_id="P001")
+         df_patient2 = generate_patient_data(num_records=500, patient_id="P002")
+         all_data = pd.concat([df_patient1, df_patient2], ignore_index=True)
+         all_data.to_csv(data_filepath, index=False)
+         print("Sample data generated successfully.")
+     else:
+         print("Simulated patient data found.")
+ 
+     # 3. Train the model (if not already trained)
+     model_path = "models/predictive_model.pkl"
+     if not os.path.exists(model_path):
+         print("Trained model not found. Training a new model...")
+         train_predictive_model(data_filepath)
+         print("Model training complete.")
+     else:
+         print("Trained model found. Skipping training.")
+ 
+     # 4. Initialize the prediction engine
+     try:
+         engine = PredictionEngine()
+     except FileNotFoundError as e:
+         print(f"Error initializing prediction engine: {e}")
+         print("Please ensure `model_training.py` was run successfully to create the necessary files.")
+         return
+ 
+     # 5. Continuous monitoring simulation (in a real app, this would be from sensors)
+     print("\n--- Simulating Real-time Patient Monitoring ---")
+     print("Enter patient vital signs (or 'exit' to quit):")
+ 
+     while True:
+         try:
+             heart_rate_str = input("Heart Rate (BPM): ")
+             if heart_rate_str.lower() == 'exit': break
+             heart_rate = int(heart_rate_str)
+ 
+             systolic_bp_str = input("Systolic BP (mmHg): ")
+             if systolic_bp_str.lower() == 'exit': break
+             systolic_bp = int(systolic_bp_str)
+ 
+             diastolic_bp_str = input("Diastolic BP (mmHg): ")
+             if diastolic_bp_str.lower() == 'exit': break
+             diastolic_bp = int(diastolic_bp_str)
+ 
+             glucose_level_str = input("Glucose Level (mg/dL): ")
+             if glucose_level_str.lower() == 'exit': break
+             glucose_level = int(glucose_level_str)
+ 
+             activity_level_str = input("Activity Level (METs, e.g., 5.2): ")
+             if activity_level_str.lower() == 'exit': break
+             activity_level = float(activity_level_str)
+ 
+             sleep_hours_str = input("Sleep Hours (e.g., 7.5): ")
+             if sleep_hours_str.lower() == 'exit': break
+             sleep_hours = float(sleep_hours_str)
+ 
+             stress_level_str = input("Stress Level (1-10): ")
+             if stress_level_str.lower() == 'exit': break
+             stress_level = float(stress_level_str)
+ 
+             patient_input = {
+                 'HeartRate': heart_rate,
+                 'SystolicBP': systolic_bp,
+                 'DiastolicBP': diastolic_bp,
+                 'GlucoseLevel': glucose_level,
+                 'ActivityLevel': activity_level,
+                 'SleepHours': sleep_hours,
+                 'StressLevel': stress_level
+             }
+ 
+             predicted_risk, risk_probability = engine.predict_risk(patient_input)
+ 
+             if predicted_risk is not None:
+                 print(f"\n--- AI Health Prediction ---")
+                 print(f"Predicted Risk: {'HIGH' if predicted_risk == 1 else 'LOW'} (Probability: {risk_probability:.2f})")
+                 if predicted_risk == 1:
+                     print("Recommendation: Alert! Please consult your doctor for immediate review. Consider reducing stress and improving sleep.")
+                 else:
+                     print("Recommendation: Your health metrics are currently stable. Continue monitoring and maintain a healthy lifestyle.")
+                 print("---------------------------\n")
+ 
+         except ValueError:
+             print("Invalid input. Please enter numerical values for health metrics.")
+         except Exception as e:
+             print(f"An error occurred during prediction: {e}")
+ 
+ if __name__ == "__main__":
+     main()
